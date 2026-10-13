@@ -1,0 +1,58 @@
+name: Collect public news headlines
+
+on:
+  schedule:
+    - cron: '7,27,47 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: public-news-data
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: github.repository == 'ljy-spec/goodlucktoday-news'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify and collect fixed public feeds
+        run: |
+          python scripts/collect-news.py --self-test
+          python scripts/collect-news.py "$RUNNER_TEMP/news-editions"
+      - name: Publish only the four headline snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NEWS_PARENT_SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/news-data" --jq '.[] | select(.ref == "refs/heads/news-data") | .object.sha')"
+          export NEWS_PARENT_SHA
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          tree = [{'path': f'editions/{locale}.json', 'mode': '100644', 'type': 'blob',
+                   'content': (root / 'news-editions' / f'{locale}.json').read_text(encoding='utf-8')}
+                  for locale in ('ko', 'en', 'ja', 'es')]
+          (root / 'news-tree.json').write_text(json.dumps({'tree': tree}), encoding='utf-8')
+          PY
+          NEWS_TREE_SHA="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/trees" --input "$RUNNER_TEMP/news-tree.json" --jq '.sha')"
+          export NEWS_TREE_SHA
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          parent = os.environ['NEWS_PARENT_SHA']
+          body = {'message': 'Refresh public news headlines', 'tree': os.environ['NEWS_TREE_SHA'], 'parents': [parent] if parent else []}
+          (Path(os.environ['RUNNER_TEMP']) / 'news-commit.json').write_text(json.dumps(body), encoding='utf-8')
+          PY
+          news_commit_sha="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/commits" --input "$RUNNER_TEMP/news-commit.json" --jq '.sha')"
+          if [ -n "$NEWS_PARENT_SHA" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/news-data" -f sha="$news_commit_sha" -F force=false --silent
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/heads/news-data -f sha="$news_commit_sha" --silent
+          fi
