@@ -21,23 +21,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Bounded feed connectivity diagnostic
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          python - <<'PY'
-          import time, urllib.request, urllib.error
-          url = 'https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en'
-          started = time.monotonic()
-          try:
-              req = urllib.request.Request(url, headers={'User-Agent': 'GoodLuckToday-News/1.0'})
-              with urllib.request.urlopen(req, timeout=8) as response:
-                  body = response.read(3000001)
-                  print('Google RSS status', response.status, 'bytes', len(body))
-          except Exception as error:
-              print('Google RSS error', type(error).__name__, 'reason', type(getattr(error, 'reason', None)).__name__, 'HTTP', getattr(error, 'code', None))
-          print('Elapsed seconds', round(time.monotonic() - started, 2))
-          PY
-          curl -4 --max-time 10 --max-filesize 3000000 --silent --show-error --output /dev/null --write-out 'IPv4 HTTP %{http_code} seconds %{time_total}\n' 'https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en' || true
       - name: Verify and collect fixed public feeds
         run: |
           python scripts/collect-news.py --self-test
